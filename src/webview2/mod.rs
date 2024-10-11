@@ -28,8 +28,7 @@ use windows::{
 use self::drag_drop::DragDropController;
 use super::Theme;
 use crate::{
-  proxy::ProxyConfig, Error, MemoryUsageLevel, PageLoadEvent, Rect, RequestAsyncResponder, Result,
-  WebContext, WebViewAttributes, RGBA,
+  cookie::Cookie, proxy::ProxyConfig, Error, MemoryUsageLevel, PageLoadEvent, Rect, RequestAsyncResponder, Result, WebContext, WebViewAttributes, RGBA
 };
 
 const PARENT_SUBCLASS_ID: u32 = WM_USER + 0x64;
@@ -60,6 +59,7 @@ pub(crate) struct InnerWebView {
   // the webview gets dropped, otherwise we'll have a memory leak
   #[allow(dead_code)]
   drag_drop_controller: Option<DragDropController>,
+  cookie_manager: ICoreWebView2CookieManager
 }
 
 impl Drop for InnerWebView {
@@ -131,6 +131,8 @@ impl InnerWebView {
 
     let drag_drop_controller = drop_handler.map(|handler| DragDropController::new(hwnd, handler));
 
+    let cookie_manager = unsafe { webview.cast::<ICoreWebView2_2>()?.CookieManager()? };
+
     let w = Self {
       parent: RefCell::new(parent),
       hwnd,
@@ -139,6 +141,7 @@ impl InnerWebView {
       webview,
       env,
       drag_drop_controller,
+      cookie_manager
     };
 
     if is_child {
@@ -1171,6 +1174,101 @@ impl InnerWebView {
     unsafe { webview.Source(&mut pwstr)? };
     Ok(take_pwstr(pwstr))
   }
+
+  #[inline]
+  fn cookies_from_uri(cookie_manager: &ICoreWebView2CookieManager, uri: String, callback: impl Fn(Cookie) + Send + 'static) -> windows::core::Result<()> {
+    unsafe {
+      let uri = HSTRING::from(uri);
+      
+      cookie_manager.GetCookies(
+        &uri,
+        &GetCookiesCompletedHandler::create(Box::new(move |_, cookie_list| {
+          let Some(cookie_list) = cookie_list else {
+            return Ok(())
+          };
+          
+          let count = {
+            let mut count = u32::default();
+            cookie_list.Count(&mut count)?;
+            count
+          };
+
+          for idx in 0..count {
+            let cookie = cookie_list.GetValueAtIndex(idx)?;
+            
+            let domain = {
+              let mut value = PWSTR::null();
+              cookie.Domain(&mut value)?;
+              take_pwstr(value)
+            };
+
+            let expires = {
+              let mut value = f64::default();
+              cookie.Expires(&mut value)?;
+              value
+            };
+
+            let is_http_only = {
+              let mut value = BOOL::default();
+              cookie.IsHttpOnly(&mut value)?;
+              value.as_bool()
+            };
+
+            let is_secure = {
+              let mut value = BOOL::default();
+              cookie.IsSecure(&mut value)?;
+              value.as_bool()
+            };
+
+            let is_session = {
+              let mut value = BOOL::default();
+              cookie.IsSession(&mut value)?;
+              value.as_bool()
+            };
+
+            let name = {
+              let mut value = PWSTR::null();
+              cookie.Name(&mut value)?;
+              take_pwstr(value)
+            };
+
+            let path = {
+              let mut value = PWSTR::null();
+              cookie.Path(&mut value)?;
+              take_pwstr(value)
+            };
+
+            let same_site = {
+              let mut value = COREWEBVIEW2_COOKIE_SAME_SITE_KIND::default();
+              cookie.SameSite(&mut value)?;
+              value.0
+            };
+
+            let value = {
+              let mut value = PWSTR::null();
+              cookie.Value(&mut value)?;
+              take_pwstr(value)
+            };
+
+            callback(Cookie {
+                domain,
+                expires,
+                is_http_only,
+                is_secure,
+                is_session,
+                name,
+                path,
+                same_site,
+                value,
+            });
+
+          }
+
+          Ok(())
+        }))
+      )
+    }
+  }
 }
 
 /// Public APIs
@@ -1190,6 +1288,10 @@ impl InnerWebView {
 
   pub fn url(&self) -> Result<String> {
     Self::url_from_webview(&self.webview).map_err(Into::into)
+  }
+
+  pub fn cookies(&self, uri: &str, callback: impl Fn(Cookie) + Send + 'static) -> Result<()> {
+    Self::cookies_from_uri(&self.cookie_manager, uri.to_string(), callback).map_err(Into::into)
   }
 
   pub fn zoom(&self, scale_factor: f64) -> Result<()> {

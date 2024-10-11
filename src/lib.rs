@@ -202,6 +202,7 @@
 #[macro_use]
 extern crate objc;
 
+mod cookie;
 mod error;
 mod proxy;
 mod web_context;
@@ -243,6 +244,8 @@ pub use self::webview2::ScrollBarStyle;
 use self::webview2::*;
 #[cfg(target_os = "windows")]
 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller;
+#[cfg(target_os = "windows")]
+use crate::cookie::Cookie;
 
 use std::{borrow::Cow, collections::HashMap, path::PathBuf, rc::Rc};
 
@@ -1384,6 +1387,11 @@ impl WebView {
   /// Get the current url of the webview
   pub fn url(&self) -> Result<String> {
     self.webview.url()
+  }
+
+  /// Get the cookies of the given url
+  pub fn cookies(&self, url: &str, callback: impl Fn(Cookie) + Send + 'static) -> Result<()> {
+    self.webview.cookies(url, callback)
   }
 
   /// Evaluate and run javascript code.
