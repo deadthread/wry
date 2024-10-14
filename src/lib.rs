@@ -245,7 +245,7 @@ use self::webview2::*;
 #[cfg(target_os = "windows")]
 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller;
 #[cfg(target_os = "windows")]
-use crate::cookie::Cookie;
+pub use crate::cookie::Cookie;
 
 use std::{borrow::Cow, collections::HashMap, path::PathBuf, rc::Rc};
 
